@@ -1,0 +1,156 @@
+library(magrittr)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(tm)
+library(wordcloud)
+library(syuzhet)
+library(tidytext)
+library(tidyr)
+library(igraph)
+library(ggraph)
+library(readr)
+library(circlize)
+library(reshape2)
+library(stringr)
+
+getwd()
+setwd("C:/Users/velashin/Desktop")
+filename <- "lyrics.csv"
+
+#load CSV file 
+lyrics <- read.csv(filename, header=TRUE)
+
+#set column names
+colnames(lyrics) <- c("Artist_name", "Album_name","track_title", "Track_number", "Lyric", "line_number", "year")
+
+
+lyrics <- as.data.frame(lyrics)
+
+lyrics_text <- lyrics$Lyric
+lyrics_text
+
+#removing punctuation and alphanumeric content
+lyrics_text<- gsub('[[:punct:]]+', '', lyrics_text)
+lyrics_text<- gsub("([[:alpha:]])\1+", "", lyrics_text)
+
+#creating a text corpus
+docs <- Corpus(VectorSource(lyrics_text))
+docs
+# Converting the text to lowercase
+docs <- tm_map(docs, content_transformer(tolower))
+# Removing english common stopwords
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+docs
+
+# creating term document matrix 
+tdm <- TermDocumentMatrix(docs)
+
+# defining tdm as matrix
+m <- as.matrix(tdm)
+
+# getting word counts in decreasing order
+word_freqs = sort(rowSums(m), decreasing=TRUE) 
+word_freqs
+
+# creating a data frame with words and their frequencies
+lyrics_wc_df <- data.frame(word=names(word_freqs), freq=word_freqs)
+lyrics_wc_df <- lyrics_wc_df[1:300,]
+
+#check the sentiment dictionary
+get_sentiment_dictionary('bing')
+
+
+library("RColorBrewer") 
+
+# plotting word cloud
+library(wordcloud)
+set.seed(1234)
+wordcloud(words = lyrics_wc_df$word, freq = lyrics_wc_df$freq, 
+          min.freq = 8,scale=c(1.8,.5),
+          max.words=200, random.order=FALSE, rot.per=0.15, 
+          colors=brewer.pal(8, "Dark2"))
+
+
+lyrics$Lyric <- as.character(lyrics$Lyric)
+
+tidy_lyrics <- lyrics %>% 
+  unnest_tokens(word,Lyric)
+
+set.seed(1234)
+tidy_lyrics %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("#F8766D", "#00BFC4"), max.words = 350)
+
+# Getting the sentiment value for the lyrics
+ty_sentiment <- get_nrc_sentiment((lyrics_text))
+
+# Dataframe with cumulative value of the sentiments
+Sentimentscores <- data.frame(colSums(ty_sentiment[,]))
+
+# Dataframe with sentiment and score as columns
+names(Sentimentscores) <- "Score"
+Sentimentscores <- cbind("sentiment"=rownames(Sentimentscores),Sentimentscores)
+rownames(Sentimentscores) <- NULL
+
+# Plot for the cumulative sentiments
+ggplot(data=Sentimentscores,aes(x=sentiment,y=Score))+
+  geom_bar(aes(fill=sentiment),stat = "identity")+
+  theme(legend.position="none")+
+  xlab("Sentiments")+ylab("Scores")+
+  ggtitle("Total sentiment based on scores")+
+  theme_minimal()
+
+song_wrd_count <- tidy_lyrics %>% count(track_title)
+
+lyric_counts <- tidy_lyrics %>%
+  left_join(song_wrd_count, by = "track_title") %>% 
+  rename(total_words=n)
+
+lyric_sentiment <- tidy_lyrics %>% 
+  inner_join(get_sentiments("nrc"),by="word")
+
+lyric_sentiment %>% 
+  count(word,sentiment,sort=TRUE) %>% 
+  group_by(sentiment)%>%top_n(n=10) %>% 
+  ungroup() %>%
+  ggplot(aes(x=reorder(word,n),y=n,fill=sentiment)) +
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~sentiment,scales="free") +
+  xlab("Sentiments") + ylab("Scores")+
+  ggtitle("Top words used to express emotions and sentiments") +
+  coord_flip()
+
+
+lyric_sentiment %>% 
+  count(track_title,sentiment,sort=TRUE) %>% 
+  group_by(sentiment) %>%
+  top_n(n=5) %>% 
+  ggplot(aes(x=reorder(track_title,n),y=n,fill=sentiment)) + 
+  geom_bar(stat="identity",show.legend = FALSE) + 
+  facet_wrap(~sentiment,scales="free") + 
+  xlab("Sentiments") + ylab("Scores")+
+  ggtitle("Top songs associated with emotions and sentiments") +
+  coord_flip()
+
+
+grid.col = c("Michael Jackson Scream" = "#E69F00", "Off The Wall" = "#56B4E9")
+
+album_emotion <- lyric_sentiment %>%
+  filter(!sentiment %in% c("positive", "negative")) %>%
+  count(sentiment, Album_name) %>%
+  group_by(Album_name, sentiment) %>%
+  summarise(sentiment_sum = sum(n)) %>%
+  ungroup()
+
+circos.clear()
+
+#Set the gap size
+circos.par(gap.after = c(rep(3, length(unique(album_emotion[[1]])) - 1), 15,
+                         rep(3, length(unique(album_emotion[[2]])) - 1), 15))
+
+chordDiagram(album_emotion, grid.col = grid.col, transparency = .2)
+title("Relationship between emotion and albums")
